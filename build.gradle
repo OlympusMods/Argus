@@ -1,0 +1,194 @@
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+
+def windows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+def modVersion = findProperty('mod_version') ?: '1.0.0'
+def useDaemon = Boolean.parseBoolean(String.valueOf(findProperty('useDaemon') ?: 'false'))
+def copyLayers = windows || Boolean.parseBoolean(String.valueOf(findProperty('copyLayers') ?: 'false'))
+def extraArgs = String.valueOf(findProperty('childArgs') ?: '').trim()
+def dist = layout.buildDirectory.dir('dist')
+def order = gradle.ext.order
+
+def csv = { String name ->
+    def value = findProperty(name)
+    value ? value.toString().split(',').collect { it.trim() }.findAll { !it.isEmpty() } : []
+}
+def onlyVersions = csv('onlyVersions')
+def onlyLoaders = csv('onlyLoaders')
+
+def jdkHome = { int major ->
+    def value = findProperty("java${major}Home") ?: System.getenv("JAVA${major}_HOME")
+    return value ? value.toString() : null
+}
+
+def layersOf = { String id, String loader ->
+    def layers = [file('core'), file("loaders/${loader}")]
+    for (String version : order) {
+        layers << file("versions/${version}/common")
+        layers << file("versions/${version}/${loader}")
+        if (version == id) {
+            break
+        }
+    }
+    layers.findAll { it.isDirectory() }
+}
+
+def mergeLayers = { String id, String loader ->
+    def files = new TreeMap<String, File>()
+    ['publish.gradle', 'CHANGELOG.md'].each { files[it] = file(it) }
+    layersOf(id, loader).each { layer ->
+        Path base = layer.toPath()
+        layer.eachFileRecurse(groovy.io.FileType.FILES) { found ->
+            String rel = base.relativize(found.toPath()).toString().replace(File.separatorChar, (char) '/')
+            if (rel.endsWith('.removed')) {
+                files.remove(rel.substring(0, rel.length() - '.removed'.length()))
+            } else {
+                files[rel] = found
+            }
+        }
+    }
+    files
+}
+
+def keptAsCopy = { String rel ->
+    rel == 'gradlew' || rel == 'gradlew.bat' || rel.startsWith('gradle/wrapper/')
+}
+
+def writeTarget = { File dir, Map<String, File> files ->
+    Path root = dir.toPath()
+    File manifest = new File(dir, '.layers-manifest')
+    Set<String> previous = manifest.exists() ? manifest.readLines() as Set : [] as Set
+    previous.findAll { !files.containsKey(it) }.each { rel ->
+        Path stale = root.resolve(rel)
+        Files.deleteIfExists(stale)
+        Path parent = stale.parent
+        while (parent != root && parent.toFile().isDirectory() && parent.toFile().list().length == 0) {
+            Files.delete(parent)
+            parent = parent.parent
+        }
+    }
+    files.each { rel, source ->
+        Path place = root.resolve(rel)
+        Path origin = source.toPath().toAbsolutePath()
+        Files.createDirectories(place.parent)
+        boolean link = !copyLayers && !keptAsCopy(rel)
+        if (link && Files.isSymbolicLink(place) && Files.readSymbolicLink(place) == origin) {
+            return
+        }
+        Files.deleteIfExists(place)
+        if (link) {
+            try {
+                Files.createSymbolicLink(place, origin)
+                return
+            } catch (UnsupportedOperationException | IOException ignored) {
+            }
+        }
+        Files.copy(origin, place, StandardCopyOption.REPLACE_EXISTING)
+        if (source.canExecute()) {
+            place.toFile().setExecutable(true)
+        }
+    }
+    manifest.text = files.keySet().join('\n') + '\n'
+}
+
+def delegated = [
+    build            : ['build', 'Builds the %s jar with Java %d'],
+    compile          : ['compileJava', 'Compiles %s with Java %d'],
+    clean            : ['clean', 'Cleans %s'],
+    runClient        : ['runClient', 'Runs the %s client'],
+    publishMods      : ['publishMods', 'Publishes the %s jar to Modrinth and CurseForge'],
+    publishModrinth  : ['publishModrinth', 'Publishes the %s jar to Modrinth'],
+    publishCurseforge: ['publishCurseforge', 'Publishes the %s jar to CurseForge']
+]
+
+def selected = gradle.ext.targets.findAll {
+    (onlyVersions.isEmpty() || it.version in onlyVersions) && (onlyLoaders.isEmpty() || it.loader in onlyLoaders)
+}
+
+gradle.ext.targets.each { target ->
+    def sub = project(":${target.version}:${target.loader}")
+    def name = "${target.loader} ${target.version}".toString()
+    def home = jdkHome(target.jdk)
+
+    sub.tasks.register('assemble') {
+        group = 'mod'
+        description = "Lays out the sources of ${name} from core, loaders and versions"
+        doLast {
+            writeTarget(sub.projectDir, mergeLayers(target.version, target.loader))
+        }
+    }
+
+    delegated.each { taskName, spec ->
+        def childTask = spec[0]
+        sub.tasks.register(taskName, Exec) {
+            group = 'mod'
+            description = spec[1].contains('%d') ? String.format(spec[1], name, target.jdk) : String.format(spec[1], name)
+            dependsOn 'assemble'
+            workingDir = sub.projectDir
+            def command = windows
+                    ? ['cmd', '/c', 'gradlew.bat']
+                    : ['sh', new File(sub.projectDir, 'gradlew').absolutePath]
+            command << childTask
+            command << "-Pmod_version=${modVersion}".toString()
+            command << "-Pversion=${modVersion}".toString()
+            if (!useDaemon) {
+                command << '--no-daemon'
+            }
+            if (gradle.startParameter.offline) {
+                command << '--offline'
+            }
+            if (home) {
+                environment 'JAVA_HOME', home
+                command << "-Dorg.gradle.java.installations.paths=${home}".toString()
+            }
+            if (findProperty('dryRun')) {
+                command << "-PdryRun=${findProperty('dryRun')}".toString()
+            }
+            if (extraArgs) {
+                command.addAll(extraArgs.split('\\s+') as List)
+            }
+            commandLine command
+        }
+    }
+
+    sub.tasks.register('collectJar', Copy) {
+        group = 'mod'
+        description = "Copies the ${name} jar into the root dist directory"
+        from(sub.layout.projectDirectory.dir('build/libs')) {
+            include '*.jar'
+            exclude '*-sources.jar', '*-javadoc.jar', '*-dev.jar', '*-slim.jar'
+        }
+        into(dist)
+    }
+
+    sub.tasks.named('build') {
+        finalizedBy 'collectJar'
+    }
+}
+
+def everyTask = ['assemble'] + delegated.keySet().toList().findAll { it != 'runClient' }
+
+everyTask.each { taskName ->
+    def about = taskName == 'assemble' ? 'Lays out the sources of' : "Runs ${taskName} for"
+
+    order.each { id ->
+        project(":${id}").tasks.register(taskName) {
+            group = 'mod'
+            description = "${about} every loader of ${id}"
+            dependsOn selected.findAll { it.version == id }.collect { ":${it.version}:${it.loader}:${taskName}".toString() }
+        }
+    }
+
+    tasks.register(taskName) {
+        group = 'mod'
+        description = "${about} every selected version and loader (-PonlyVersions=1.21.4,1.21.6 -PonlyLoaders=fabric to narrow it)"
+        dependsOn selected.collect { ":${it.version}:${it.loader}:${taskName}".toString() }
+    }
+}
+
+tasks.register('compileAll') {
+    group = 'mod'
+    description = 'Compiles every selected version and loader (use with --continue)'
+    dependsOn 'compile'
+}

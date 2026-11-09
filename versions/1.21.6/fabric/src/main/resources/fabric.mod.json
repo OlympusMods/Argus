@@ -1,0 +1,32 @@
+{
+	"schemaVersion": 1,
+	"id": "argus",
+	"version": "${version}",
+	"name": "Argus",
+	"description": "Zoom and freelook camera with scroll steps, smooth transitions and a detached orbit view.",
+	"authors": [
+		"Akis"
+	],
+	"contact": {
+		"homepage": "https://github.com/OlympusMods/Argus",
+		"sources": "https://github.com/OlympusMods/Argus"
+	},
+	"license": "GPL-3.0-only",
+	"icon": "icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"com.github.olympus.argus.ArgusFabric"
+		]
+	},
+	"mixins": [
+		"argus.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": ">=1.21.6 <1.21.9-",
+		"java": ">=21",
+		"fabric-api": "*",
+		"proteus": ">=1.1.0"
+	}
+}

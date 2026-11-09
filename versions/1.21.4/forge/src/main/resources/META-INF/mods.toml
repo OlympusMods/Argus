@@ -1,0 +1,36 @@
+modLoader="javafml"
+loaderVersion="[54,)"
+license="GPL-3.0-only"
+
+[[mods]]
+modId="argus"
+version="${mod_version}"
+displayName="Argus"
+authors="Akis"
+logoFile="icon.png"
+
+description='''Zoom and freelook camera with scroll steps, smooth transitions and a detached orbit view.'''
+
+[[dependencies.argus]]
+    modId="forge"
+    mandatory=true
+    versionRange="[54,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.argus]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="[1.21.4,1.21.6)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.argus]]
+    modId="proteus"
+    mandatory=true
+    versionRange="[1.1.0,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[mixins]]
+config = "argus.mixins.json"
