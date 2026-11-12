@@ -11,7 +11,7 @@ def info = project.ext.modPublish
 
 // Filled in by init.py. A platform whose id is still TEMPLATE_* is skipped, so nothing is uploaded by accident.
 def modrinthId = '2bQlogz3'
-def curseforgeId = 'TEMPLATE_CURSEFORGE_ID'
+def curseforgeId = '1801178'
 def modrinthSide = 'client_only'
 def curseforgeClient = true
 def curseforgeServer = false
